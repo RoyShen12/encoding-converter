@@ -26,7 +26,7 @@ function getMostPossibleEncoding(buffer) {
 }
 
 function progress() {
-  return chalk.cyanBright(`${nowScannedPosition} / ${totalFoundCount}`)
+  return chalk.cyanBright(`${++nowScannedPosition} / ${totalFoundCount}`)
 }
 
 function main(targetDir, blk = 0) {
@@ -36,9 +36,9 @@ function main(targetDir, blk = 0) {
 
   list.forEach(async fn => {
     const fnColorBad = chalk.magentaBright(fn)
-    nowScannedPosition++
 
     if (fn[0] === '.') {
+      nowScannedPosition++
       // console.log(`ignore hidden file: ${fnColorBad} ${progress()}`)
       return
     }
@@ -52,33 +52,35 @@ function main(targetDir, blk = 0) {
     const fsizeColor = chalk.rgb(221, 220, 178).italic(fsize)
 
     if (fstat.isDirectory()) {
-      console.log(`cd to directory: ${fnColor}`)
+      console.log(`cd->: ${fnColor}`)
+      nowScannedPosition++
+
       main(fp, blk + 2)
     }
     else if (!fn.toLowerCase().includes('.txt')) {
-      console.log(`detect file: ${fnColorBad} not a file meet '*.txt' ${progress()}`)
+      console.log(`file: ${fnColorBad} not a file meet '*.txt' ${progress()}`)
     }
     else {
       const fbuf = await fs.promises.readFile(fp)
       const mpecd = getMostPossibleEncoding(fbuf)
 
       if (mpecd === 'UTF-8') {
-        console.log(`${' '.repeat(blk)}file: ${fnColorGood} jumped, already been ${UTF_color} ${progress()}`)
+        console.log(`${' '.repeat(blk)}jump: ${fnColorGood}, already been ${UTF_color} ${progress()}`)
         // console.log(fbuf.toString().substr(0, 4))
         if (fbuf[0] === 0xef && fbuf[1] === 0xbb && fbuf[2] === 0xbf) {
           await fs.promises.writeFile(fp, stripBomBuffer(fbuf))
         }
       }
       else if (mpecd === 'Big5' || mpecd === 'GB18030') {
-        console.log(`${' '.repeat(blk)}processing file: ${fnColor}, rewrite from ${GBK_color} -> ${UTF_color} ${fsizeColor} ${progress()}`)
+        console.log(`${' '.repeat(blk)}proc: ${fnColor}, rewrite from ${GBK_color} -> ${UTF_color} ${fsizeColor} ${progress()}`)
         await fs.promises.writeFile(fp, stripBom(iconv.decode(fbuf, 'GBK')))
       }
       else if (mpecd.includes('UTF-16')) {
-        console.log(`${' '.repeat(blk)}processing file: ${fnColor}, rewrite from ${UTF16_color} -> ${UTF_color} ${fsizeColor} ${progress()}`)
+        console.log(`${' '.repeat(blk)}proc: ${fnColor}, rewrite from ${UTF16_color} -> ${UTF_color} ${fsizeColor} ${progress()}`)
         await fs.promises.writeFile(fp, stripBom(iconv.decode(fbuf, mpecd)))
       }
       else {
-        console.log(`${' '.repeat(blk)}try to convert file: ${fnColor}, rewrite from ${chalk.yellowBright(mpecd)} -> ${UTF_color} ${fsizeColor} ${progress()}`)
+        console.log(`${' '.repeat(blk)}try proc: ${fnColor}, rewrite from ${chalk.yellowBright(mpecd)} -> ${UTF_color} ${fsizeColor} ${progress()}`)
         let decodedStr = ''
         try {
           decodedStr = iconv.decode(fbuf, mpecd)
