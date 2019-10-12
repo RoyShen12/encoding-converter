@@ -1,4 +1,9 @@
 # encoding-converter
+
+# 前提条件
+
+- node.js 版本 >= 8.0
+
 # 如何使用
 
 ```shell
