@@ -29,18 +29,19 @@ function progress() {
   return chalk.cyanBright(`${++nowScannedPosition} / ${totalFoundCount}`)
 }
 
-function main(targetDir, blk = 0) {
+async function main(targetDir, blk = 0) {
   const list = fs.readdirSync(targetDir)
 
   totalFoundCount += list.length
 
-  list.forEach(async fn => {
+  for (const fn of list) {
+  // list.forEach(async fn => {
     const fnColorBad = chalk.magentaBright(fn)
 
     if (fn[0] === '.') {
       nowScannedPosition++
       // console.log(`ignore hidden file: ${fnColorBad} ${progress()}`)
-      return
+      continue
     }
 
     const fp = `${targetDir}/${fn}`
@@ -55,7 +56,7 @@ function main(targetDir, blk = 0) {
       console.log(`cd->: ${fnColor}`)
       nowScannedPosition++
 
-      main(fp, blk + 2)
+      await main(fp, blk + 2)
     }
     else if (!fn.toLowerCase().includes('.txt')) {
       console.log(`file: ${fnColorBad} not a file meet '*.txt' ${progress()}`)
@@ -87,7 +88,7 @@ function main(targetDir, blk = 0) {
         } catch (err) {
           console.log(chalk.redBright(`error while converting file: ${fnColorBad}`))
           console.error(err)
-          return
+          continue
         }
         await fs.promises.writeFile(fp, stripBom(decodedStr))
       }
@@ -95,7 +96,8 @@ function main(targetDir, blk = 0) {
       //   console.log(`${' '.repeat(blk)}file: ${fnColorBad} jumped, not a GBK file, may be ${chalk.yellowBright(mpecd)} ${progress()}`)
       // }
     }
-  })
+  // })
+  }
 }
 
 main(dir)
