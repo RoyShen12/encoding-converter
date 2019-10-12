@@ -1,0 +1,19 @@
+{
+  "name": "gbk-to-utf8",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "chalk": "^2.4.2",
+    "chardet": "^0.8.0",
+    "human-size": "^1.1.0",
+    "iconv-lite": "^0.5.0",
+    "strip-bom": "^4.0.0",
+    "strip-bom-buf": "^2.0.0"
+  }
+}
