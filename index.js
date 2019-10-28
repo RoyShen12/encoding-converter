@@ -11,7 +11,23 @@ const stripBomBuffer = require('strip-bom-buf')
 
 const dir = process.argv[2]
 
-console.log(`working dir: ${dir}\n`)
+const customExt = (process.argv.find(a => a.indexOf('-ext=') !== -1) || '-ext=').substr(5).split(',').map(e => e.trim()).filter(Boolean)
+const validateExt = ['txt', ...customExt]
+const innerExtReg = validateExt.map(e => e + '$').join('|')
+
+function isInvalidExt(fname) {
+  return new RegExp(innerExtReg, 'i').test(fname)
+}
+
+const customIgnore = (process.argv.find(a => a.indexOf('-i=') !== -1) || '-i=').substr(3).split(',').map(e => e.trim()).filter(Boolean)
+const ignore = ['^node_modules$', ...customIgnore]
+const innerIgnoreReg = ignore.join('|')
+
+function canIgnore(fname) {
+  return new RegExp(innerIgnoreReg).test(fname)
+}
+
+console.log(`working dir: ${dir}\nwork on extend: ${validateExt.join(', ')}\ningore file: ${ignore.join(', ')}\n`)
 
 const GBK_color = chalk.red('GBK')
 const UTF16_color = chalk.redBright('UTF-16')
@@ -36,9 +52,10 @@ async function main(targetDir, blk = 0) {
 
   for (const fn of list) {
   // list.forEach(async fn => {
+    // const fnLower = fn.toLowerCase()
     const fnColorBad = chalk.magentaBright(fn)
 
-    if (fn[0] === '.') {
+    if (fn[0] === '.' || canIgnore(fn)) {
       nowScannedPosition++
       // console.log(`ignore hidden file: ${fnColorBad} ${progress()}`)
       continue
@@ -53,13 +70,13 @@ async function main(targetDir, blk = 0) {
     const fsizeColor = chalk.rgb(221, 220, 178).italic(fsize)
 
     if (fstat.isDirectory()) {
-      console.log(`cd->: ${fnColor}`)
       nowScannedPosition++
 
+      console.log(`${' '.repeat(blk)}}cd->: ${fnColor}`)
       await main(fp, blk + 2)
     }
-    else if (!fn.toLowerCase().includes('.txt')) {
-      console.log(`file: ${fnColorBad} not a file meet '*.txt' ${progress()}`)
+    else if (!isInvalidExt(fn)) {
+      // console.log(`file: ${fnColorBad} not a file meet any of these extend: '${validateExt.join(',')}' ${progress()}`)
     }
     else {
       const fbuf = await fs.promises.readFile(fp)
