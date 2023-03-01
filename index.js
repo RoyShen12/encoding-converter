@@ -11,7 +11,8 @@ const hs = require('human-size')
 const stripBom = require('strip-bom')
 const stripBomBuffer = require('strip-bom-buf')
 
-const cli = meow(`
+const cli = meow(
+  `
     Usage
       $ node index -d <> [options]
 
@@ -19,17 +20,34 @@ const cli = meow(`
       -d, --dir <str>               Working directory
       -e, --extension <str>         Working extension, default is txt
       -i, --ignore <str | reg>      Ignore pattern, default is ^\\.,^node_modules$
-`, {
-  flags: {
-    dir: { alias: 'd' },
-    extension: { alias: 'e' },
-    ignore: { alias: 'i' }
+      --dry-run                     Dry run, do not write file
+`,
+  {
+    flags: {
+      dir: { alias: 'd' },
+      extension: { alias: 'e' },
+      ignore: { alias: 'i' },
+      dryRun: {
+        type: 'boolean',
+      },
+    },
   }
-})
+)
+
+const writeFile = (fp, buf) => {
+  if (cli.flags.dryRun) {
+    return
+  }
+
+  fs.writeFileSync(fp, buf)
+}
 
 const dir = cli.flags.dir
 
-const customExt = (cli.flags.extension || '').split(',').map(e => e.trim()).filter(Boolean)
+const customExt = (cli.flags.extension || '')
+  .split(',')
+  .map(e => e.trim())
+  .filter(Boolean)
 const validateExt = ['txt', ...customExt]
 const innerExtReg = new RegExp(validateExt.map(e => `\\.${e}$`).join('|'), 'i')
 
@@ -37,7 +55,10 @@ function isInvalidExt(fname) {
   return innerExtReg.test(fname)
 }
 
-const customIgnore = (cli.flags.ignore || '').split(',').map(e => e.trim()).filter(Boolean)
+const customIgnore = (cli.flags.ignore || '')
+  .split(',')
+  .map(e => e.trim())
+  .filter(Boolean)
 const ignore = ['^\\.', '^node_modules$', ...customIgnore]
 const innerIgnoreReg = new RegExp(ignore.join('|'))
 
@@ -85,7 +106,7 @@ function main(targetDir, blk = 0) {
   totalFoundCount += list.length
 
   for (const fn of list) {
-  // list.forEach(async fn => {
+    // list.forEach(async fn => {
     // const fnLower = fn.toLowerCase()
     const fnColorBad = chalk.magentaBright(fn)
 
@@ -108,15 +129,12 @@ function main(targetDir, blk = 0) {
 
       // console.log(`${' '.repeat(blk)}cd->: ${fnColor}`)
       main(fp, blk + 2)
-    }
-    else if (!fstat.isFile()) {
+    } else if (!fstat.isFile()) {
       nowScannedPosition++
-    }
-    else if (!isInvalidExt(fn)) {
+    } else if (!isInvalidExt(fn)) {
       nowScannedPosition++
       // console.log(`${' '.repeat(blk)}skip file: ${fnColorBad} extension unmeet`)
-    }
-    else {
+    } else {
       try {
         fs.accessSync(fp, fs.constants.F_OK | fs.constants.R_OK | fs.constants.W_OK)
       } catch (e) {
@@ -127,27 +145,36 @@ function main(targetDir, blk = 0) {
 
       if (mpecd === 'ISO-8859-1') {
         console.log(`${' '.repeat(blk)}${skip} ${fnColorGood}, is ${ASCII_color} already ${fsizeColor} ${progress()}`)
-      }
-      else if (mpecd === 'UTF-8') {
+      } else if (mpecd === 'UTF-8') {
         // console.log(fbuf.toString().substr(0, 4))
         if (fbuf[0] === 0xef && fbuf[1] === 0xbb && fbuf[2] === 0xbf) {
-          console.log(`${' '.repeat(blk)}${proc} ${fnColorGood}, rewrite from ${UTF_color}${chalk.yellowBright('(BOM)')} -> ${UTF_color} ${fsizeColor} ${progress()}`)
-          fs.writeFileSync(fp, stripBomBuffer(fbuf))
-        }
-        else {
+          console.log(
+            `${' '.repeat(blk)}${proc} ${fnColorGood}, rewrite from ${UTF_color}${chalk.yellowBright(
+              '(BOM)'
+            )} -> ${UTF_color} ${fsizeColor} ${progress()}`
+          )
+          writeFile(fp, stripBomBuffer(fbuf))
+        } else {
           console.log(`${' '.repeat(blk)}${skip} ${fnColorGood}, is ${UTF_color} already ${fsizeColor} ${progress()}`)
         }
-      }
-      else if (mpecd === 'GB18030') {
-        console.log(`${' '.repeat(blk)}${proc} ${fnColor}, rewrite from ${GBK_color} -> ${UTF_color} ${fsizeColor} ${progress()}`)
-        fs.writeFileSync(fp, stripBom(iconv.decode(fbuf, 'GBK')))
-      }
-      else if (mpecd.includes('UTF-16')) {
-        console.log(`${' '.repeat(blk)}${proc} ${fnColor}, rewrite from ${UTF16_color} -> ${UTF_color} ${fsizeColor} ${progress()}`)
-        fs.writeFileSync(fp, stripBom(iconv.decode(fbuf, mpecd)))
-      }
-      else {
-        console.log(`${' '.repeat(blk)}${try_proc} ${fnColor}, rewrite from ${chalk.yellowBright(mpecd)} -> ${UTF_color} ${fsizeColor} ${progress()}`)
+      } else if (mpecd === 'GB18030') {
+        console.log(
+          `${' '.repeat(blk)}${proc} ${fnColor}, rewrite from ${GBK_color} -> ${UTF_color} ${fsizeColor} ${progress()}`
+        )
+        writeFile(fp, stripBom(iconv.decode(fbuf, 'GBK')))
+      } else if (mpecd.includes('UTF-16')) {
+        console.log(
+          `${' '.repeat(
+            blk
+          )}${proc} ${fnColor}, rewrite from ${UTF16_color} -> ${UTF_color} ${fsizeColor} ${progress()}`
+        )
+        writeFile(fp, stripBom(iconv.decode(fbuf, mpecd)))
+      } else {
+        console.log(
+          `${' '.repeat(blk)}${try_proc} ${fnColor}, rewrite from ${chalk.yellowBright(
+            mpecd
+          )} -> ${UTF_color} ${fsizeColor} ${progress()}`
+        )
         let decodedStr = ''
         try {
           decodedStr = iconv.decode(fbuf, mpecd)
@@ -156,7 +183,7 @@ function main(targetDir, blk = 0) {
           console.error(err)
           continue
         }
-        fs.writeFileSync(fp, stripBom(decodedStr))
+        writeFile(fp, stripBom(decodedStr))
       }
     }
   }
