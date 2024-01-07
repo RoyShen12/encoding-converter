@@ -1,8 +1,8 @@
 # encoding-converter
 
-# 前提条件
+# Requirements
 
-- node.js 版本 >= 8.0
+- node.js >= 8.0
 
 # --help
 
@@ -16,29 +16,29 @@ Options
   -i, --ignore <str | reg>      Ignore pattern, default is ^\\.,^node_modules$
 ```
 
-# 安装
+# Installation
 
 ```shell
 git clone https://github.com/RoyShen12/encoding-converter.git && cd encoding-converter
 npm install
 ```
 
-# 如何使用
+# How to Use
 
 ```
-# 参数是你想要处理的目录
-# 可以使用相对目录，也可以使用绝对路径
-# 程序会递归寻找所有的 txt 文件，转换到 utf-8 并删除 BOM 标记
+# The argument is the directory you want to process
+# You can use a relative directory or an absolute path
+# The program will recursively find all txt files, convert them to utf-8 and remove BOM markers
 node index -d ~/text-books/example-dir # posix
 node index -d "C:\Users\Admin\Downloads\Books" # windows
 
 # -i <string | regexp>
-# 注意：此处仅支持有限的正则：
-# 不支持忽略大小写，如果想达到忽略大小写的效果，可以将 /akg/i 改写为 /[aA][kK][gG]/
-# 不支持 \d, \w, \d 等反斜杠标记
-node index -d ~/text-books/example-dir -i no-change,^important* # 处理文件，但忽略扫描到的文件名或目录名中包含 no-change 或以 important 开头的情况
+# Note: only limited regular expressions are supported here:
+# Case insensitive is not supported, to achieve the effect of case insensitivity, /akg/i can be rewritten as /[aA][kK][gG]/
+# \d, \w, \d and other backslash markers are not supported.
+node index -d ~/text-books/example-dir -i no-change,^important* # process files, but ignore scans that contain no-change or start with important in the file or directory name
 
 # -e <string>
-node index -d ~/text-books/example-dir -e js # 除了默认的 txt 后缀文件外，也会处理 js 文件
+node index -d ~/text-books/example-dir -e js # In addition to the default txt suffix files, js files will also be processed
 
 ```
