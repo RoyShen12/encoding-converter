@@ -34,6 +34,13 @@ const cli = meow(
   }
 )
 
+function ensureDirProvided() {
+  if (!cli.flags || !cli.flags.dir) {
+    console.error(chalk.redBright('Error: --dir is required.'))
+    cli.showHelp(1)
+  }
+}
+
 const writeFile = (fp, buf) => {
   if (cli.flags.dryRun) {
     return
@@ -42,7 +49,19 @@ const writeFile = (fp, buf) => {
   fs.writeFileSync(fp, buf)
 }
 
+ensureDirProvided()
 const dir = cli.flags.dir
+
+function assertDirAccessible(p) {
+  try {
+    fs.accessSync(p, fs.constants.F_OK | fs.constants.R_OK)
+  } catch (e) {
+    console.error(chalk.redBright(e.toString().split('\n')[0]))
+    process.exit(1)
+  }
+}
+
+assertDirAccessible(dir)
 
 const customExt = (cli.flags.extension || '')
   .split(',')
@@ -51,7 +70,7 @@ const customExt = (cli.flags.extension || '')
 const validateExt = ['txt', ...customExt]
 const innerExtReg = new RegExp(validateExt.map(e => `\\.${e}$`).join('|'), 'i')
 
-function isInvalidExt(fname) {
+function hasAllowedExt(fname) {
   return innerExtReg.test(fname)
 }
 
@@ -67,8 +86,8 @@ function canIgnore(fname) {
 }
 
 console.log(`working dir: ${dir}
-work on extend: ${validateExt.map(e => `.${e}`).join(', ')}
-ingore file: ${ignore.join(', ')}
+work on extensions: ${validateExt.map(e => `.${e}`).join(', ')}
+ignore file: ${ignore.join(', ')}
 `)
 
 const ASCII_color = chalk.magentaBright('ascii')
@@ -84,8 +103,18 @@ let totalFoundCount = 0
 let nowScannedPosition = 0
 
 function getMostPossibleEncoding(buffer) {
-  const r = chardet.detect(buffer)
-  return typeof r === 'string' ? r : r[0].name
+  try {
+    const r = chardet.detect(buffer)
+    if (!r) return 'UTF-8'
+    return typeof r === 'string' ? r : (Array.isArray(r) && r[0] && r[0].name) ? r[0].name : 'UTF-8'
+  } catch (e) {
+    return 'UTF-8'
+  }
+}
+
+function normalizeEncodingName(name) {
+  if (!name) return 'UTF-8'
+  return String(name).trim().toUpperCase()
 }
 
 function progress() {
@@ -101,23 +130,34 @@ function main(targetDir, blk = 0) {
     }
   }
 
-  const list = fs.readdirSync(targetDir)
+  let list = []
+  try {
+    list = fs.readdirSync(targetDir)
+  } catch (e) {
+    console.error(chalk.redBright(e.toString().split('\n')[0]))
+    return
+  }
 
   totalFoundCount += list.length
 
   for (const fn of list) {
-    // list.forEach(async fn => {
-    // const fnLower = fn.toLowerCase()
     const fnColorBad = chalk.magentaBright(fn)
 
     if (canIgnore(fn)) {
       nowScannedPosition++
-      // console.log(`${' '.repeat(blk)}ignore f/d: ${fnColorBad} ${progress()}`)
       continue
     }
 
     const fp = path.join(targetDir, fn)
-    const fstat = fs.statSync(fp)
+    let fstat
+    try {
+      fstat = fs.statSync(fp)
+    } catch (e) {
+      console.log(chalk.redBright(e.toString().split('\n')[0]))
+      nowScannedPosition++
+      continue
+    }
+
     const fsize = hs(fstat.size, 1)
 
     const fnColor = chalk.blueBright(path.relative(dir, fp))
@@ -126,14 +166,11 @@ function main(targetDir, blk = 0) {
 
     if (fstat.isDirectory()) {
       nowScannedPosition++
-
-      // console.log(`${' '.repeat(blk)}cd->: ${fnColor}`)
       main(fp, blk + 2)
     } else if (!fstat.isFile()) {
       nowScannedPosition++
-    } else if (!isInvalidExt(fn)) {
+    } else if (!hasAllowedExt(fn)) {
       nowScannedPosition++
-      // console.log(`${' '.repeat(blk)}skip file: ${fnColorBad} extension unmeet`)
     } else {
       try {
         fs.accessSync(fp, fs.constants.F_OK | fs.constants.R_OK | fs.constants.W_OK)
@@ -141,12 +178,12 @@ function main(targetDir, blk = 0) {
         console.log(chalk.redBright(e.toString().split('\n')[0]))
       }
       const fbuf = fs.readFileSync(fp)
-      const mpecd = getMostPossibleEncoding(fbuf)
+      const encRaw = getMostPossibleEncoding(fbuf)
+      const enc = normalizeEncodingName(encRaw)
 
-      if (mpecd === 'ISO-8859-1') {
+      if (enc === 'ISO-8859-1' || enc === 'ASCII') {
         console.log(`${' '.repeat(blk)}${skip} ${fnColorGood}, is ${ASCII_color} already ${fsizeColor} ${progress()}`)
-      } else if (mpecd === 'UTF-8') {
-        // console.log(fbuf.toString().substr(0, 4))
+      } else if (enc === 'UTF-8') {
         if (fbuf[0] === 0xef && fbuf[1] === 0xbb && fbuf[2] === 0xbf) {
           console.log(
             `${' '.repeat(blk)}${proc} ${fnColorGood}, rewrite from ${UTF_color}${chalk.yellowBright(
@@ -157,27 +194,27 @@ function main(targetDir, blk = 0) {
         } else {
           console.log(`${' '.repeat(blk)}${skip} ${fnColorGood}, is ${UTF_color} already ${fsizeColor} ${progress()}`)
         }
-      } else if (mpecd === 'GB18030') {
+      } else if (enc === 'GB18030' || enc === 'GBK' || enc === 'GB2312') {
         console.log(
           `${' '.repeat(blk)}${proc} ${fnColor}, rewrite from ${GBK_color} -> ${UTF_color} ${fsizeColor} ${progress()}`
         )
-        writeFile(fp, stripBom(iconv.decode(fbuf, 'GBK')))
-      } else if (mpecd.includes('UTF-16')) {
+        writeFile(fp, stripBom(iconv.decode(fbuf, 'GB18030')))
+      } else if (enc.indexOf('UTF-16') >= 0) {
         console.log(
           `${' '.repeat(
             blk
           )}${proc} ${fnColor}, rewrite from ${UTF16_color} -> ${UTF_color} ${fsizeColor} ${progress()}`
         )
-        writeFile(fp, stripBom(iconv.decode(fbuf, mpecd)))
+        writeFile(fp, stripBom(iconv.decode(fbuf, encRaw)))
       } else {
         console.log(
           `${' '.repeat(blk)}${try_proc} ${fnColor}, rewrite from ${chalk.yellowBright(
-            mpecd
+            enc
           )} -> ${UTF_color} ${fsizeColor} ${progress()}`
         )
         let decodedStr = ''
         try {
-          decodedStr = iconv.decode(fbuf, mpecd)
+          decodedStr = iconv.decode(fbuf, encRaw)
         } catch (err) {
           console.log(chalk.redBright(`error while converting file: ${fnColorBad}`))
           console.error(err)
