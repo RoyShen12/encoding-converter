@@ -1,6 +1,7 @@
 const fs = require('fs')
 const path = require('path')
-// const { promisify } = require('util')
+const os = require('os')
+const crypto = require('crypto')
 
 const meow = require('meow')
 const chardet = require('chardet')
@@ -34,44 +35,36 @@ const cli = meow(
   }
 )
 
-function ensureDirProvided() {
-  if (!cli.flags || !cli.flags.dir) {
-    console.error(chalk.redBright('Error: --dir is required.'))
-    cli.showHelp(1)
-  }
+// ---------- argv validation ----------
+
+if (!cli.flags || !cli.flags.dir) {
+  console.error(chalk.redBright('Error: --dir is required.'))
+  cli.showHelp(1)
 }
 
-const writeFile = (fp, buf) => {
-  if (cli.flags.dryRun) {
-    return
-  }
+const dir = path.resolve(cli.flags.dir)
 
-  fs.writeFileSync(fp, buf)
+try {
+  fs.accessSync(dir, fs.constants.F_OK | fs.constants.R_OK)
+} catch (e) {
+  console.error(chalk.redBright(e.toString().split('\n')[0]))
+  process.exit(1)
 }
 
-ensureDirProvided()
-const dir = cli.flags.dir
-
-function assertDirAccessible(p) {
-  try {
-    fs.accessSync(p, fs.constants.F_OK | fs.constants.R_OK)
-  } catch (e) {
-    console.error(chalk.redBright(e.toString().split('\n')[0]))
-    process.exit(1)
-  }
-}
-
-assertDirAccessible(dir)
+// ---------- regex build ----------
 
 const customExt = (cli.flags.extension || '')
   .split(',')
   .map(e => e.trim())
   .filter(Boolean)
 const validateExt = ['txt', ...customExt]
-const innerExtReg = new RegExp(validateExt.map(e => `\\.${e}$`).join('|'), 'i')
 
-function hasAllowedExt(fname) {
-  return innerExtReg.test(fname)
+let innerExtReg
+try {
+  innerExtReg = new RegExp(validateExt.map(e => `\\.${e}$`).join('|'), 'i')
+} catch (e) {
+  console.error(chalk.redBright(`Invalid --extension pattern: ${e.message}`))
+  process.exit(1)
 }
 
 const customIgnore = (cli.flags.ignore || '')
@@ -79,34 +72,76 @@ const customIgnore = (cli.flags.ignore || '')
   .map(e => e.trim())
   .filter(Boolean)
 const ignore = ['^\\.', '^node_modules$', ...customIgnore]
-const innerIgnoreReg = new RegExp(ignore.join('|'))
 
-function canIgnore(fname) {
-  return innerIgnoreReg.test(fname)
+let innerIgnoreReg
+try {
+  innerIgnoreReg = new RegExp(ignore.map(p => `(?:${p})`).join('|'))
+} catch (e) {
+  console.error(chalk.redBright(`Invalid --ignore pattern: ${e.message}`))
+  process.exit(1)
 }
+
+const hasAllowedExt = fname => innerExtReg.test(fname)
+const canIgnore = fname => innerIgnoreReg.test(fname)
 
 console.log(`working dir: ${dir}
 work on extensions: ${validateExt.map(e => `.${e}`).join(', ')}
 ignore file: ${ignore.join(', ')}
+${cli.flags.dryRun ? chalk.yellowBright('DRY RUN — no files will be written') : ''}
 `)
+
+// ---------- color / label constants ----------
 
 const ASCII_color = chalk.magentaBright('ascii')
 const GBK_color = chalk.red('GBK')
 const UTF16_color = chalk.redBright('UTF-16')
 const UTF_color = chalk.greenBright('UTF-8')
+const BIN_color = chalk.gray('binary')
 
 const skip = 'skip:'
 const proc = chalk.redBright('proc:')
 const try_proc = chalk.yellowBright('try proc:')
 
-let totalFoundCount = 0
-let nowScannedPosition = 0
+// ---------- helpers ----------
+
+const SAMPLE_BYTES = 128 * 1024 // enough for chardet to get confident on most texts
+
+function readSample(fp, size) {
+  // Read at most `size` bytes without loading the whole file.
+  let fd
+  try {
+    fd = fs.openSync(fp, 'r')
+    const buf = Buffer.allocUnsafe(size)
+    const n = fs.readSync(fd, buf, 0, size, 0)
+    return buf.subarray(0, n)
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd) } catch (_) { /* noop */ }
+    }
+  }
+}
+
+function looksBinary(buf) {
+  // Presence of NUL byte in the sample is a reliable "not a text file" signal.
+  // UTF-16 text contains NULs, so we must exempt it — detect BOM first.
+  if (buf.length >= 2) {
+    const b0 = buf[0], b1 = buf[1]
+    if ((b0 === 0xff && b1 === 0xfe) || (b0 === 0xfe && b1 === 0xff)) return false
+  }
+  const scanLen = Math.min(buf.length, 8192)
+  for (let i = 0; i < scanLen; i++) {
+    if (buf[i] === 0) return true
+  }
+  return false
+}
 
 function getMostPossibleEncoding(buffer) {
   try {
     const r = chardet.detect(buffer)
     if (!r) return 'UTF-8'
-    return typeof r === 'string' ? r : (Array.isArray(r) && r[0] && r[0].name) ? r[0].name : 'UTF-8'
+    if (typeof r === 'string') return r
+    if (Array.isArray(r) && r[0] && r[0].name) return r[0].name
+    return 'UTF-8'
   } catch (e) {
     return 'UTF-8'
   }
@@ -117,113 +152,207 @@ function normalizeEncodingName(name) {
   return String(name).trim().toUpperCase()
 }
 
-function progress() {
-  return chalk.cyanBright(`${++nowScannedPosition} / ${totalFoundCount}`)
+function writeFileAtomic(fp, data) {
+  if (cli.flags.dryRun) return
+  // Write to a temp sibling, then rename. Keeps the original file intact if
+  // the process dies mid-write, and avoids partial reads by other tools.
+  const dirOfFile = path.dirname(fp)
+  const tmp = path.join(dirOfFile, `.${path.basename(fp)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`)
+  try {
+    fs.writeFileSync(tmp, data)
+    fs.renameSync(tmp, fp)
+  } catch (e) {
+    try { fs.unlinkSync(tmp) } catch (_) { /* noop */ }
+    throw e
+  }
 }
 
-function main(targetDir, blk = 0) {
-  if (blk > 0) {
+// ---------- pass 1: walk & collect targets ----------
+
+/**
+ * Iteratively walks the tree. Returns an array of file entries to process.
+ * - Uses `withFileTypes` to avoid separate stat calls for type checks.
+ * - Uses `lstatSync` semantics (readdir + dirent.isSymbolicLink) to break symlink cycles.
+ */
+function collectTargets(rootDir) {
+  /** @type {{fp: string, depth: number}[]} */
+  const files = []
+  /** @type {{dir: string, depth: number}[]} */
+  const stack = [{ dir: rootDir, depth: 0 }]
+
+  while (stack.length) {
+    const { dir: curDir, depth } = stack.pop()
+    let entries
     try {
-      fs.accessSync(targetDir, fs.constants.F_OK | fs.constants.R_OK | fs.constants.X_OK)
+      entries = fs.readdirSync(curDir, { withFileTypes: true })
     } catch (e) {
       console.error(chalk.redBright(e.toString().split('\n')[0]))
+      continue
+    }
+
+    for (const ent of entries) {
+      const name = ent.name
+      if (canIgnore(name)) continue
+
+      // Skip symlinks entirely — prevents loops and surprise writes through links.
+      if (ent.isSymbolicLink()) continue
+
+      const fp = path.join(curDir, name)
+
+      if (ent.isDirectory()) {
+        stack.push({ dir: fp, depth: depth + 2 })
+      } else if (ent.isFile() && hasAllowedExt(name)) {
+        files.push({ fp, depth })
+      }
+      // anything else (socket/fifo/block/char) is silently skipped
     }
   }
 
-  let list = []
+  return files
+}
+
+// ---------- pass 2: process each file ----------
+
+let errorCount = 0
+let rewriteCount = 0
+let skippedCount = 0
+
+function processFile(fp, depth, index, total) {
+  const rel = path.relative(dir, fp)
+  const fnColor = chalk.blueBright(rel)
+  const fnColorGood = chalk.greenBright(rel)
+  const fnColorBad = chalk.magentaBright(rel)
+  const pad = ' '.repeat(depth)
+  const progress = chalk.cyanBright(`${index} / ${total}`)
+
+  let stat
   try {
-    list = fs.readdirSync(targetDir)
+    stat = fs.statSync(fp)
   } catch (e) {
+    errorCount++
     console.error(chalk.redBright(e.toString().split('\n')[0]))
     return
   }
+  const fsizeColor = chalk.rgb(221, 220, 178).italic(hs(stat.size, 1))
 
-  totalFoundCount += list.length
+  // Read a sample for detection; decode path will read full buffer only when needed.
+  let sample
+  try {
+    sample = readSample(fp, Math.min(SAMPLE_BYTES, Math.max(stat.size, 1)))
+  } catch (e) {
+    errorCount++
+    console.error(chalk.redBright(`read failed: ${fnColorBad} — ${e.message}`))
+    return
+  }
 
-  for (const fn of list) {
-    const fnColorBad = chalk.magentaBright(fn)
+  if (looksBinary(sample)) {
+    skippedCount++
+    console.log(`${pad}${skip} ${fnColorGood}, looks like ${BIN_color} ${fsizeColor} ${progress}`)
+    return
+  }
 
-    if (canIgnore(fn)) {
-      nowScannedPosition++
-      continue
-    }
+  const encRaw = getMostPossibleEncoding(sample)
+  const enc = normalizeEncodingName(encRaw)
 
-    const fp = path.join(targetDir, fn)
-    let fstat
-    try {
-      fstat = fs.statSync(fp)
-    } catch (e) {
-      console.log(chalk.redBright(e.toString().split('\n')[0]))
-      nowScannedPosition++
-      continue
-    }
+  // Fast paths that don't need the full buffer.
+  if (enc === 'ISO-8859-1' || enc === 'ASCII') {
+    skippedCount++
+    console.log(`${pad}${skip} ${fnColorGood}, is ${ASCII_color} already ${fsizeColor} ${progress}`)
+    return
+  }
 
-    const fsize = hs(fstat.size, 1)
-
-    const fnColor = chalk.blueBright(path.relative(dir, fp))
-    const fnColorGood = chalk.greenBright(path.relative(dir, fp))
-    const fsizeColor = chalk.rgb(221, 220, 178).italic(fsize)
-
-    if (fstat.isDirectory()) {
-      nowScannedPosition++
-      main(fp, blk + 2)
-    } else if (!fstat.isFile()) {
-      nowScannedPosition++
-    } else if (!hasAllowedExt(fn)) {
-      nowScannedPosition++
-    } else {
+  if (enc === 'UTF-8') {
+    // Only need to check BOM — first 3 bytes of the sample are enough.
+    if (sample.length >= 3 && sample[0] === 0xef && sample[1] === 0xbb && sample[2] === 0xbf) {
+      let full
       try {
-        fs.accessSync(fp, fs.constants.F_OK | fs.constants.R_OK | fs.constants.W_OK)
+        full = fs.readFileSync(fp)
       } catch (e) {
-        console.log(chalk.redBright(e.toString().split('\n')[0]))
+        errorCount++
+        console.error(chalk.redBright(`read failed: ${fnColorBad} — ${e.message}`))
+        return
       }
-      const fbuf = fs.readFileSync(fp)
-      const encRaw = getMostPossibleEncoding(fbuf)
-      const enc = normalizeEncodingName(encRaw)
-
-      if (enc === 'ISO-8859-1' || enc === 'ASCII') {
-        console.log(`${' '.repeat(blk)}${skip} ${fnColorGood}, is ${ASCII_color} already ${fsizeColor} ${progress()}`)
-      } else if (enc === 'UTF-8') {
-        if (fbuf[0] === 0xef && fbuf[1] === 0xbb && fbuf[2] === 0xbf) {
-          console.log(
-            `${' '.repeat(blk)}${proc} ${fnColorGood}, rewrite from ${UTF_color}${chalk.yellowBright(
-              '(BOM)'
-            )} -> ${UTF_color} ${fsizeColor} ${progress()}`
-          )
-          writeFile(fp, stripBomBuffer(fbuf))
-        } else {
-          console.log(`${' '.repeat(blk)}${skip} ${fnColorGood}, is ${UTF_color} already ${fsizeColor} ${progress()}`)
-        }
-      } else if (enc === 'GB18030' || enc === 'GBK' || enc === 'GB2312') {
+      try {
+        writeFileAtomic(fp, stripBomBuffer(full))
+        rewriteCount++
         console.log(
-          `${' '.repeat(blk)}${proc} ${fnColor}, rewrite from ${GBK_color} -> ${UTF_color} ${fsizeColor} ${progress()}`
+          `${pad}${proc} ${fnColorGood}, rewrite from ${UTF_color}${chalk.yellowBright('(BOM)')} -> ${UTF_color} ${fsizeColor} ${progress}`
         )
-        writeFile(fp, stripBom(iconv.decode(fbuf, 'GB18030')))
-      } else if (enc.indexOf('UTF-16') >= 0) {
-        console.log(
-          `${' '.repeat(
-            blk
-          )}${proc} ${fnColor}, rewrite from ${UTF16_color} -> ${UTF_color} ${fsizeColor} ${progress()}`
-        )
-        writeFile(fp, stripBom(iconv.decode(fbuf, encRaw)))
-      } else {
-        console.log(
-          `${' '.repeat(blk)}${try_proc} ${fnColor}, rewrite from ${chalk.yellowBright(
-            enc
-          )} -> ${UTF_color} ${fsizeColor} ${progress()}`
-        )
-        let decodedStr = ''
-        try {
-          decodedStr = iconv.decode(fbuf, encRaw)
-        } catch (err) {
-          console.log(chalk.redBright(`error while converting file: ${fnColorBad}`))
-          console.error(err)
-          continue
-        }
-        writeFile(fp, stripBom(decodedStr))
+      } catch (e) {
+        errorCount++
+        console.error(chalk.redBright(`write failed: ${fnColorBad} — ${e.message}`))
       }
+    } else {
+      skippedCount++
+      console.log(`${pad}${skip} ${fnColorGood}, is ${UTF_color} already ${fsizeColor} ${progress}`)
     }
+    return
+  }
+
+  // All remaining paths must decode the whole buffer.
+  let full
+  try {
+    full = fs.readFileSync(fp)
+  } catch (e) {
+    errorCount++
+    console.error(chalk.redBright(`read failed: ${fnColorBad} — ${e.message}`))
+    return
+  }
+
+  try {
+    if (enc === 'GB18030' || enc === 'GBK' || enc === 'GB2312') {
+      writeFileAtomic(fp, stripBom(iconv.decode(full, 'GB18030')))
+      rewriteCount++
+      console.log(
+        `${pad}${proc} ${fnColor}, rewrite from ${GBK_color} -> ${UTF_color} ${fsizeColor} ${progress}`
+      )
+    } else if (enc.indexOf('UTF-16') >= 0) {
+      writeFileAtomic(fp, stripBom(iconv.decode(full, encRaw)))
+      rewriteCount++
+      console.log(
+        `${pad}${proc} ${fnColor}, rewrite from ${UTF16_color} -> ${UTF_color} ${fsizeColor} ${progress}`
+      )
+    } else {
+      if (!iconv.encodingExists(encRaw)) {
+        errorCount++
+        console.error(
+          chalk.redBright(`unsupported encoding ${enc} for file: ${fnColorBad}`)
+        )
+        return
+      }
+      const decodedStr = iconv.decode(full, encRaw)
+      writeFileAtomic(fp, stripBom(decodedStr))
+      rewriteCount++
+      console.log(
+        `${pad}${try_proc} ${fnColor}, rewrite from ${chalk.yellowBright(enc)} -> ${UTF_color} ${fsizeColor} ${progress}`
+      )
+    }
+  } catch (e) {
+    errorCount++
+    console.error(chalk.redBright(`convert failed: ${fnColorBad} — ${e.message}`))
   }
 }
 
-main(dir)
+// ---------- entry ----------
+
+const t0 = Date.now()
+const targets = collectTargets(dir)
+const total = targets.length
+
+if (total === 0) {
+  console.log(chalk.yellowBright('No matching files found.'))
+  process.exit(0)
+}
+
+for (let i = 0; i < targets.length; i++) {
+  const { fp, depth } = targets[i]
+  processFile(fp, depth, i + 1, total)
+}
+
+const elapsed = ((Date.now() - t0) / 1000).toFixed(2)
+console.log('')
+console.log(
+  `${chalk.greenBright('done')} — rewritten: ${chalk.greenBright(rewriteCount)}, skipped: ${chalk.cyanBright(skippedCount)}, errors: ${errorCount > 0 ? chalk.redBright(errorCount) : 0}, elapsed: ${elapsed}s`
+)
+
+if (errorCount > 0) process.exit(1)

@@ -1,154 +1,67 @@
-# QWEN: Project Guide and Interaction Context
+# CLAUDE.md
 
-This document provides an at-a-glance overview of the repository to streamline future interactions with Qwen Code.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+## Project
 
-- Name: gbk-to-utf8 (encoding-converter)
-- Type: Node.js CLI utility
-- Purpose: Recursively scan a target directory for text files, detect their encodings, and normalize them to UTF-8 without BOM. Files already in ASCII/UTF-8 (without BOM) are skipped; UTF-8 with BOM has the BOM removed; GBK/GB18030 and UTF-16 variants are converted to UTF-8.
-- Entry point: `index.js`
-- License: MIT
+`gbk-to-utf8` (package name) / `encoding-converter` (repo name): a single-file Node.js CLI that recursively normalizes text files in a directory tree to UTF-8 without BOM. CommonJS, no build step, no tests, no linter.
 
-### Key Technologies and Libraries
-- Node.js (CommonJS)
-- Dependencies:
-  - `meow` for CLI argument parsing
-  - `chardet` for encoding detection
-  - `iconv-lite` for decoding and conversion
-  - `strip-bom` and `strip-bom-buf` for BOM removal
-  - `chalk` for colored terminal output
-  - `human-size` for formatted sizes in logs
+## Commands
 
-### High-level Architecture
-- Single-file CLI (`index.js`) that:
-  1. Parses flags via `meow`.
-  2. Builds allowlist of file extensions and ignore patterns.
-  3. Recursively traverses the working directory.
-  4. For each file whose basename matches allowed extensions and not ignored patterns:
-     - Detects encoding using `chardet`.
-     - Decides whether to skip, strip BOM, or transcode to UTF-8.
-     - Writes the result back to disk (unless `--dry-run`).
-
-## Requirements
-- Node.js >= 8.0 (per README). Modern LTS Node versions are fine.
-- macOS, Linux, and Windows supported (path examples provided for both POSIX and Windows).
-
-## Installation
-
-Using npm:
+Install (pnpm is preferred — `pnpm-lock.yaml` is checked in):
 
 ```bash
-git clone https://github.com/RoyShen12/encoding-converter.git
-cd encoding-converter
-npm install
+pnpm install        # or: npm install
 ```
 
-Using pnpm (a pnpm-lock.yaml is present):
+Run the CLI (there is no `bin` entry; invoke with `node` directly):
 
-```bash
-git clone https://github.com/RoyShen12/encoding-converter.git
-cd encoding-converter
-pnpm install
-```
-
-## Building and Running
-
-There is no build step. Run the CLI with Node directly.
-
-Basic usage:
-
-```bash
-node index -d <directory> [options]
-```
-
-Options (from `index.js`):
-- `-d, --dir <str>`: Working directory (required).
-- `-e, --extension <str>`: Comma-separated list of additional extensions to process. The default allowlist is `txt` plus any values provided here. Matching is case-insensitive. Example: `-e js,md`.
-- `-i, --ignore <str | reg>`: Comma-separated list of ignore patterns (joined into a single RegExp). Defaults: `^\.,^node_modules$`. Example: `-i no-change,^important`.
-- `--dry-run`: Do not write files; only log actions.
-
-Behavior details:
-- Default processed extensions: `.txt`; add more via `-e`.
-- Ignoring uses a single combined (case-sensitive) RegExp tested against the basename (not full path) of files/directories.
-- Encoding handling:
-  - `ISO-8859-1` (treated as ASCII): skip.
-  - `UTF-8` without BOM: skip.
-  - `UTF-8` with BOM: strip BOM and rewrite as UTF-8 without BOM.
-  - `GB18030`: decode as `GBK` and rewrite as UTF-8.
-  - `UTF-16` variants: decode using detected label and rewrite as UTF-8.
-  - Other encodings: best-effort decode using the detected name; on failure, log error and continue.
-
-Examples:
-
-```bash
-# POSIX
-node index -d ~/text-books/example-dir
-node index -d ~/text-books/example-dir -i no-change,^important
-node index -d ~/text-books/example-dir -e js,md --dry-run
-
-# Windows
-aut scripts
-node index -d "C:\\Users\\Admin\\Downloads\\Books"
-```
-
-Return codes:
-- Always runs to completion unless an unhandled error occurs. No explicit non-zero exit codes defined for conversion failures (they are logged and processing continues).
-
-## Development Conventions
-- Code style: Plain CommonJS in a single file (`index.js`); no linter or formatter is configured.
-- Testing: No tests are defined. `npm test` currently errors by design (placeholder script).
-- Git: Standard repository layout; `.gitignore` excludes editor folders, `node_modules`, and `.DS_Store`.
-- Logging: Colorized status (skip/proc/try proc), relative paths from the working directory, file sizes via `human-size`, and a simple progress counter `current/total`.
-
-Suggested practices for contributors:
-- Run with `--dry-run` during development to preview actions.
-- Commit in small, reviewable chunks; consider adding basic unit tests and/or a small fixture directory for integration testing.
-- If adding features, follow the existing CLI flag patterns and meow usage.
-
-## Known Caveats and Notes
-- Encoding detection is heuristic; some files may be misclassified.
-- Ignore patterns are combined into a single case-sensitive RegExp and applied to basenames only.
-- The function name `isInvalidExt` is a slight misnomer: it returns `true` when a filename matches the allowed extension list; the code uses `!isInvalidExt` to skip non-allowed files.
-- When decoding with `iconv-lite`, outputs are written as UTF-8 by Node’s default when passing strings to `fs.writeFileSync`.
-- Large directories are processed synchronously; there is no concurrency control.
-
-## Repository Layout
-- `index.js`: Main CLI logic.
-- `package.json`: Package metadata, dependencies, and placeholder test script.
-- `README.md`: Requirements, installation steps, and usage notes (does not mention `--dry-run`; see above for the full option set).
-- `LICENSE`: MIT License.
-- `.gitignore`: Common ignores.
-- `pnpm-lock.yaml`: Lockfile for pnpm users.
-
-## Testing and Quality
-- Current status: No tests. Consider adding:
-  - Unit tests for pattern building and encoding decision branches.
-  - Integration tests over a small sample directory containing files with different encodings and BOM states.
-- Linting/formatting: Not configured; follow existing code style.
-
-## Quick Commands Cheat Sheet
-
-Install dependencies:
-```bash
-npm install
-# or
-pnpm install
-```
-
-Run conversion:
 ```bash
 node index -d <target-dir> [-e ext1,ext2] [-i pattern1,pattern2] [--dry-run]
 ```
 
-Check package metadata:
-```bash
-cat package.json
-```
+`npm test` is a placeholder that exits 1 — there are no tests.
 
-## TODOs / Potential Enhancements
-- Add proper tests and CI.
-- Expose an npm binary (`bin` entry) for `npx gbk-to-utf8` style usage.
-- Improve ignore pattern semantics (e.g., path-based matching, case-insensitive option).
-- Add concurrency options for performance on large trees.
-- Expand README to include `--dry-run` and examples for multiple extensions.
+## Architecture
+
+Everything lives in `index.js`. The flow is split into two passes:
+
+1. **CLI parsing** via `meow`. Required flag: `-d/--dir`. Optional: `-e/--extension` (comma list, added to the default `txt`), `-i/--ignore` (comma list, merged with defaults `^\.` and `^node_modules$`), `--dry-run`.
+2. **Pattern construction**:
+   - Allowed extensions become one case-insensitive regex: `/\.txt$|\.js$|.../i`.
+   - Ignore patterns are each wrapped in `(?:...)` and joined with `|` into one **case-sensitive** regex tested against **basenames only** (not full paths). The `(?:...)` wrapping avoids `|` priority bleed between user patterns, but `/i` flags and `\d`/`\w` escapes are still effectively unsupported since patterns are concatenated as source strings.
+3. **Pass 1 — `collectTargets(rootDir)`**: iterative (explicit stack) walk using `fs.readdirSync(..., { withFileTypes: true })`. Directory types come from `Dirent`, so there's no separate `statSync` per entry. **Symlinks are skipped unconditionally** (breaks cycles and prevents accidental writes through links). Returns `{fp, depth}[]`; `depth` is the indent level for log output (2 per directory level). No concurrency — intentional, since the tool rewrites files in place.
+4. **Pass 2 — `processFile(...)`** iterates the collected list. For each file:
+   - `readSample(fp, 128KB)` reads the head without loading the whole file.
+   - `looksBinary(sample)` returns true if any NUL appears in the first 8KB (UTF-16 BOM is exempt). Binary files are skipped.
+   - `chardet.detect` runs on the sample only; normalized to uppercase.
+   - Decision tree, keyed on the normalized encoding:
+     - `ISO-8859-1` / `ASCII` → skip.
+     - `UTF-8` → skip unless BOM (`EF BB BF`), in which case read the full buffer, strip BOM, rewrite.
+     - `GB18030` / `GBK` / `GB2312` → full-read, decode as `GB18030` via `iconv-lite`, strip BOM, rewrite.
+     - Contains `UTF-16` → full-read, decode with the raw detected label, strip BOM, rewrite.
+     - Anything else → `iconv.encodingExists` guard, then best-effort decode with the raw detected label; failures are logged and counted.
+5. **Atomic writes** go through `writeFileAtomic(fp, data)`: writes to a `.<name>.<pid>.<rand>.tmp` sibling then `rename()`s over the original. No-op under `--dry-run`. Decoded strings passed to `fs.writeFileSync` are written as UTF-8 by Node's default string encoding.
+6. **Exit code**: process exits `1` if any file errored (read/decode/write/unsupported encoding). End-of-run summary prints `rewritten / skipped / errors / elapsed`.
+
+### Progress counter
+
+`i / total` in log lines is accurate — `total` is the final length of pass-1's target list, frozen before pass 2 starts. The old "denominator grows during walk" behavior is gone.
+
+### Naming gotcha
+
+`hasAllowedExt(fname)` (previously called `isInvalidExt`) returns `true` when a filename **matches** the allowlist. Earlier comments/history may reference the old misleading name.
+
+## Behavior notes that matter when changing code
+
+- Encoding detection is **heuristic** and runs on the first 128KB only — short files or mixed content can still be misclassified. The `try proc:` branch exists precisely for detections the code doesn't explicitly handle.
+- Ignore matching is basename-only and case-sensitive; changing this is a user-visible semantics change.
+- Symlinks are skipped, not followed — changing this can reintroduce directory cycles.
+- Binary detection uses a NUL-byte sniff on the first 8KB; it's a heuristic, not a guarantee, but it prevents the most common misfires on mislabeled `.txt` files.
+- The tool **overwrites files in place** via atomic rename. Still verify changes with `--dry-run` first when developing.
+- Exit code is non-zero on any file error — don't remove the error counter silently; downstream scripts may depend on it.
+- Node >= 8 per README, but the code uses no features that would break on modern LTS.
+
+## Repo layout
+
+`index.js` (all logic) · `package.json` · `README.md` · `LICENSE` · `pnpm-lock.yaml`. No `src/`, no tests, no CI.
